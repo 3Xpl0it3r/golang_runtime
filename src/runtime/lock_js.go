@@ -60,7 +60,7 @@ type noteWithTimeout struct {
 
 var (
 	notes            = make(map[*note]*g)
-	notesWithTimeout = make(map[*note]noteWithTimeout)
+	notesWithTimeout = make(map[*note]WithTimeout)
 )
 
 func noteclear(n *note) {
@@ -136,6 +136,7 @@ func notetsleepg(n *note, ns int64) bool {
 }
 
 // checkTimeouts resumes goroutines that are waiting on a note which has reached its deadline.
+// checkTimeout 用来恢复那些，正在处于daedline 正在等一个信号的goroutine
 func checkTimeouts() {
 	now := nanotime()
 	for n, nt := range notesWithTimeout {

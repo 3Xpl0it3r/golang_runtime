@@ -138,6 +138,7 @@ var oneptrmask = [...]uint8{1}
 // nowritebarrier is only advisory here.
 //
 //go:nowritebarrier
+// markroot 会扫描缓存，数据段，存放在全局变量和静态变量的BSS段，以及goroutine里面的栈内存
 func markroot(gcw *gcWork, i uint32) {
 	// TODO(austin): This is a bit ridiculous. Compute and store
 	// the bases in gcMarkRootPrepare instead of the counts.
@@ -379,12 +380,16 @@ func markrootSpans(gcw *gcWork, shard int) {
 // gp must be the calling user gorountine.
 //
 // This must be called with preemption enabled.
+// gcAssistAlloc 用来执行GC work 来帮助goroutine 来偿还债务
+// gp必须是用户的goroutine, 而且这个goroutine 必须是可抢占的
 func gcAssistAlloc(gp *g) {
 	// Don't assist in non-preemptible contexts. These are
 	// generally fragile and won't allow the assist to block.
+	// 检测当前正在运行在物理线程上的goroutine是不是g0， 如果是g0则返回(执行这个函数的必须是用户的goroutine)
 	if getg() == gp.m.g0 {
 		return
 	}
+	// 必须是可被抢占的，如果禁止抢占，则返回
 	if mp := getg().m; mp.locks > 0 || mp.preemptoff != "" {
 		return
 	}
@@ -395,7 +400,8 @@ retry:
 	// balance positive. When the required amount of work is low,
 	// we over-assist to build up credit for future allocations
 	// and amortize the cost of assisting.
-	debtBytes := -gp.gcAssistBytes
+	debtBytes := -gp.gcAssistBytes			// 当前goroutine在以及偿还了多少/或者说当前goroutine 提前支付了多少/当前goroutine已经帮忙扫描了多少
+	// gc
 	scanWork := int64(gcController.assistWorkPerByte * float64(debtBytes))
 	if scanWork < gcOverAssistWork {
 		scanWork = gcOverAssistWork
@@ -438,18 +444,20 @@ retry:
 	}
 
 	// Perform assist work
+	// 开始执行赋值标记工作
 	systemstack(func() {
 		gcAssistAlloc1(gp, scanWork)
 		// The user stack may have moved, so this can't touch
 		// anything on it until it returns from systemstack.
 	})
 
-	completed := gp.param != nil
+	completed := gp.param != nil 		//如果gp.param 不为nil, 意味着有caller调用了wake 来唤醒goroutine, 意味着辅助标记工作完成了
 	gp.param = nil
 	if completed {
 		gcMarkDone()
 	}
 
+	// 如果标记完成了，当前的goroutine 仍然入不敷出，那么runtime 会执行runtime.gcParkAssist让当前的goroutine休眠，加入全局辅助标记队列里面等待被调度
 	if gp.gcAssistBytes < 0 {
 		// We were unable steal enough credit or perform
 		// enough work to pay off the assist debt. We need to
@@ -628,10 +636,10 @@ func gcFlushBgCredit(scanWork int64) {
 		// small window here where an assist may add itself to
 		// the blocked queue and park. If that happens, we'll
 		// just get it on the next flush.
+		// 如果当前队列里面不存在等待的goroutine，那么当前的信用会直接全部加入到全局信用bgScanCredit 里面
 		atomic.Xaddint64(&gcController.bgScanCredit, scanWork)
 		return
 	}
-
 	scanBytes := int64(float64(scanWork) * gcController.assistBytesPerWork)
 
 	lock(&work.assistQueue.lock)
@@ -944,32 +952,39 @@ const (
 	gcDrainFractional
 )
 
+// gcDrain 扫描roots 和work buffers里面的对象，将对象标记为黑色灰色，直到它无法获取更多的工作。
+// gcDrain 有可能在gc完成之前就退出
 // gcDrain scans roots and objects in work buffers, blackening grey
 // objects until it is unable to get more work. It may return before
 // GC is done; it's the caller's responsibility to balance work from
 // other Ps.
 //
+// 当goroutine的preempt 被设置为true的返回
 // If flags&gcDrainUntilPreempt != 0, gcDrain returns when g.preempt
 // is set.
 //
+// 调用runtime.pollWork 处理器上包含其他待执行的goroutine返回
 // If flags&gcDrainIdle != 0, gcDrain returns when there is other work
 // to do.
 //
+// 调用runtime.pollFractionalWorkerExit 当CPU超过fractionalUtilizationGoal 的20%的时候返回
 // If flags&gcDrainFractional != 0, gcDrain self-preempts when
 // pollFractionalWorkerExit() returns true. This implies
 // gcDrainNoBlock.
 //
+// 调用runtime.gcFlushBgCredit  计算后台完成的标记任务的数量，以减少并发标记期间的辅助垃圾收集的用户程序的工作量
 // If flags&gcDrainFlushBgCredit != 0, gcDrain flushes scan work
 // credit to gcController.bgScanCredit every gcCreditSlack units of
 // scan work.
 //
 //go:nowritebarrier
+// gcDrain 是用于扫描和标记堆内存里面对象的核心方法（三色标记的核心思想也是在这个地方实现的)
 func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 	if !writeBarrier.needed {
 		throw("gcDrain phase incorrect")
 	}
 
-	gp := getg().m.curg
+	gp := getg().m.curg 				// 获取当前正在运行的goroutine
 	preemptible := flags&gcDrainUntilPreempt != 0
 	flushBgCredit := flags&gcDrainFlushBgCredit != 0
 	idle := flags&gcDrainIdle != 0
@@ -990,6 +1005,7 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 	}
 
 	// Drain root marking jobs.
+	// root 标记任务 markroot(gcw,job) markroot 会扫描缓存，数据段，存放在全局变量和静态变量的BSS段，以及goroutine里面的栈内存
 	if work.markrootNext < work.markrootJobs {
 		for !(preemptible && gp.preempt) {
 			job := atomic.Xadd(&work.markrootNext, +1) - 1
@@ -1004,6 +1020,7 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 	}
 
 	// Drain heap marking jobs.
+	// 开始执行heap上的标记工作
 	for !(preemptible && gp.preempt) {
 		// Try to keep work available on the global queue. We used to
 		// check if there were waiting workers, but it's better to
@@ -1011,6 +1028,7 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 		// worst case, we'll do O(log(_WorkbufSize)) unnecessary
 		// balances.
 		if work.full == 0 {
+			// balance 移动一部分缓存在gcWork里面的work移动到全局队列里面，这个用来保证不同处理器之间的平衡
 			gcw.balance()
 		}
 
@@ -1029,6 +1047,7 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 			// Unable to get work.
 			break
 		}
+		// heap上对象的扫描工作
 		scanobject(b, gcw)
 
 		// Flush background scan work credit to the global
@@ -1054,6 +1073,7 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 
 done:
 	// Flush remaining scan work credit.
+	// 同步剩下需要扫描的工作量（防止意外情况导致扫描工作中断,记录下当前以及扫描了多少，以及剩下多少)
 	if gcw.scanWork > 0 {
 		atomic.Xaddint64(&gcController.scanWork, gcw.scanWork)
 		if flushBgCredit {
@@ -1186,6 +1206,7 @@ func scanblock(b0, n0 uintptr, ptrmask *uint8, gcw *gcWork, stk *stackScanState)
 // spans for the size of the object.
 //
 //go:nowritebarrier
+// scanobject 从b这个地方开始扫描，将扫描到的对象放到gcw里面
 func scanobject(b uintptr, gcw *gcWork) {
 	// Find the bits for b and the size of the object at b.
 	//

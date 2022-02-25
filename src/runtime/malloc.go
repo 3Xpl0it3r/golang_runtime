@@ -889,6 +889,7 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 // Small objects are allocated from the per-P cache's free lists.
 // Large objects (> 32 kB) are allocated straight from the heap.
 func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
+	// 如果当前正在处于_GCmarktermination 状态，则抛出异常
 	if gcphase == _GCmarktermination {
 		throw("mallocgc called with gcphase == _GCmarktermination")
 	}
@@ -922,43 +923,44 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	// assistG is the G to charge for this allocation, or nil if
 	// GC is not currently active.
+	// 辅助标记阶段
 	var assistG *g
-	if gcBlackenEnabled != 0 {
-		// Charge the current user G for this allocation.
+	if gcBlackenEnabled != 0 { 			// 如果gcBlackenEnabled 说明当前正在处于gcMark阶段
+		// Charge the current user G for this allocation. 			// 当前申请allocation的goroutine需要负责一些清扫工作
 		assistG = getg()
 		if assistG.m.curg != nil {
-			assistG = assistG.m.curg
+			assistG = assistG.m.curg							// 获取当前物理线程上正在执行的goroutine
 		}
 		// Charge the allocation against the G. We'll account
 		// for internal fragmentation at the end of mallocgc.
-		assistG.gcAssistBytes -= int64(size)
+		assistG.gcAssistBytes -= int64(size) 				// 统计需要负债多少内存
 
 		if assistG.gcAssistBytes < 0 {
 			// This G is in debt. Assist the GC to correct
 			// this before allocating. This must happen
 			// before disabling preemption.
-			gcAssistAlloc(assistG)
+			gcAssistAlloc(assistG)				// 辅助执行清扫工作
 		}
 	}
 
 	// Set mp.mallocing to keep from being preempted by GC.
-	mp := acquirem()
+	mp := acquirem()  			// 获取当前的m
 	if mp.mallocing != 0 {
 		throw("malloc deadlock")
 	}
-	if mp.gsignal == getg() {
+	if mp.gsignal == getg() {		// 每个物理线程都有一个辅助单独的goroutine用来处理物理线程的信号的，这个goroutine 是不做任何用户事情，如果当前goroutine是信号处理goroutine 那么pannic掉
 		throw("malloc during signal")
 	}
 	mp.mallocing = 1
 
 	shouldhelpgc := false
-	dataSize := size
-	c := gomcache()
+	dataSize := size		//数据大小
+	c := gomcache()			// 获取mcache
 	var x unsafe.Pointer
 	noscan := typ == nil || typ.ptrdata == 0
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
-			// Tiny allocator.
+			// Tiny allocator.			// tiny 内存分配器
 			//
 			// Tiny allocator combines several tiny allocation requests
 			// into a single memory block. The resulting memory block

@@ -52,3 +52,4 @@ func cgoUse(interface{}) { throw("cgoUse should not be called") }
 var cgoAlwaysFalse bool
 
 var cgo_yield = &_cgo_yield
+// _cgo_yield 定义在c文件里面

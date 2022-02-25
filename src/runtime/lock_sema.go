@@ -154,8 +154,11 @@ func notewakeup(n *note) {
 	}
 }
 
+// notesleep 是平台依赖的
 func notesleep(n *note) {
+	// 获取当前的goroutine
 	gp := getg()
+	// 如果在当前M上正在运行的goroutine是g0，则抛出异常
 	if gp != gp.m.g0 {
 		throw("notesleep not on g0")
 	}

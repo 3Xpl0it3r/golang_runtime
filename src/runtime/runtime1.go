@@ -451,6 +451,7 @@ func acquirem() *m {
 
 //go:nosplit
 func releasem(mp *m) {
+	// 如果当前的正在执行的goroutine 被标记为可以抢占模式，那么将当前goroutine.stackguard0 设置为 stackPreempt
 	_g_ := getg()
 	mp.locks--
 	if mp.locks == 0 && _g_.preempt {

@@ -210,20 +210,21 @@ ok:
 	MOVL	AX, 0(SP)
 	MOVQ	24(SP), AX		// copy argv
 	MOVQ	AX, 8(SP)
-	CALL	runtime·args(SB)
-	CALL	runtime·osinit(SB)
-	CALL	runtime·schedinit(SB)
+	CALL	runtime·args(SB)                // 在g0上执行
+	CALL	runtime·osinit(SB)              // 在g0上执行
+	CALL	runtime·schedinit(SB)           // 调度器初始化 （M，P还有其他的初始化) 也是在g0上面执行
 
 	// create a new goroutine to start program
-	MOVQ	$runtime·mainPC(SB), AX		// entry
+	MOVQ	$runtime·mainPC(SB), AX		// entry   //  这个地方其实调用了runtime.main, 将main的地址放到寄存器AX里面，
 	PUSHQ	AX
 	PUSHQ	$0			// arg size
-	CALL	runtime·newproc(SB)
+	CALL	runtime·newproc(SB)         // 通过newproc函数来调用 初始化g 将， mainPC 封装到g里面
 	POPQ	AX
 	POPQ	AX
 
 	// start this M
-	CALL	runtime·mstart(SB)
+	CALL	runtime·mstart(SB)          // 调用mstart函数
+
 
 	CALL	runtime·abort(SB)	// mstart should never return
 	RET
@@ -250,6 +251,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 
 // func gosave(buf *gobuf)
 // save state in Gobuf; setjmp
+// 保存gobuf的状态
 TEXT runtime·gosave(SB), NOSPLIT, $0-8
 	MOVQ	buf+0(FP), AX		// gobuf
 	LEAQ	buf+0(FP), BX		// caller's SP
@@ -292,6 +294,7 @@ TEXT runtime·gogo(SB), NOSPLIT, $16-8
 // Switch to m->g0's stack, call fn(g).
 // Fn must never return. It should gogo(&g->sched)
 // to keep running g.
+// 在g0的栈上调用fn(g) 这个它其实就是在g0上执行fn fn需要通过gogo来调度
 TEXT runtime·mcall(SB), NOSPLIT, $0-8
 	MOVQ	fn+0(FP), DI
 

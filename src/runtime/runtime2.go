@@ -194,6 +194,12 @@ type mutex struct {
 //
 // notesleep/notetsleep are generally called on g0,
 // notetsleepg is similar to notetsleep but is called on user g.
+// note是runtime里面的一种同步机制，这是一次性的通知，note是无锁竞争的。
+// 如果notewakeup 已经发生了，那么notesleep 会立即返回
+// note 可以通过noteclear来重置， noteclear, notesleep, notewakeup 不能发生竞争， 阻塞note 会阻塞整个M
+// note提供了不同的方式来调用sleep
+// notesleep 会阻止相关联的G和P被重新调度，
+// notesleepg 的表象是像一个阻塞的系统调用一样，允许P被重用调用另外一个G，尽管如此这个仍然要比阻塞G要低效，因为这个需要消耗一个M
 type note struct {
 	// Futex-based impl treats it as uint32 key,
 	// while sema-based impl as M* waitm.
@@ -428,7 +434,10 @@ type g struct {
 	waitsince    int64      // approx time when the g become blocked
 	waitreason   waitReason // if status==Gwaiting
 
-	preempt       bool // preemption signal, duplicates stackguard0 = stackpreempt
+	// 当preempt 被设置为true的时候，这个时候将stackguard0 = stackpreempt,这个只是一个标记，告诉goroitine在合适的时机在调度，
+	// 这个是一个比较trick的做法，因为go会在每个函数的入口比较当前栈寄存器和stackguard的值来是否触发morestack函数。
+	// morestack 函数里面会调用newstack 函数，newstack 函数里面调用了gogo（sched) 触发一次调度
+	preempt       bool // preemption signal, duplicates stackguard0 = stackpreempt， 抢占标记
 	preemptStop   bool // transition to _Gpreempted on preemption; otherwise, just deschedule
 	preemptShrink bool // shrink stack at synchronous safe point
 
@@ -480,8 +489,11 @@ type g struct {
 	// scan work. We track this in bytes to make it fast to update
 	// and check for debt in the malloc hot path. The assist ratio
 	// determines how this corresponds to scan work debt.
+	// 这个字段存了goroutine辅助标记的对象字节数 ，在并发标记阶段，当goroutine调用malloc分配新对象的时候，该函数会检查申请内存的goroutine是否入不敷出
 	gcAssistBytes int64
 }
+
+// m是物理线程，只有两种状态，自旋状态和非自旋
 
 type m struct {
 	g0      *g     // goroutine with scheduling stack
@@ -507,7 +519,7 @@ type m struct {
 	locks         int32
 	dying         int32
 	profilehz     int32
-	spinning      bool // m is out of work and is actively looking for work
+	spinning      bool // m is out of work and is actively looking for work， m没有work，并且m正在积极的寻找work来运行。
 	blocked       bool // m is blocked on a note
 	newSigstack   bool // minit on C thread called sigaltstack
 	printlock     int8
@@ -566,9 +578,9 @@ type p struct {
 	id          int32
 	status      uint32 // one of pidle/prunning/...
 	link        puintptr
-	schedtick   uint32     // incremented on every scheduler call
-	syscalltick uint32     // incremented on every system call
-	sysmontick  sysmontick // last tick observed by sysmon
+	schedtick   uint32     // incremented on every scheduler call，被调度的次数，每次调度这个值都会增加1
+	syscalltick uint32     // incremented on every system call     系统调用触发的次数，每次执行syscall 都会增加1
+	sysmontick  sysmontick // last tick observed by sysmon 			上次触发系统监控的信息
 	m           muintptr   // back-link to associated m (nil if idle)
 	mcache      *mcache
 	pcache      pageCache
@@ -594,7 +606,7 @@ type p struct {
 	// unit and eliminates the (potentially large) scheduling
 	// latency that otherwise arises from adding the ready'd
 	// goroutines to the end of the run queue.
-	runnext guintptr
+	runnext guintptr 	// runnext是下一次即将被执行的goroutine,当当前的goroutine执行完/被抢占后，下一个执行的goroutine就是runnext
 
 	// Available G's (status == Gdead)
 	gFree struct {
@@ -648,6 +660,7 @@ type p struct {
 	// gcw is this P's GC work buffer cache. The work buffer is
 	// filled by write barriers, drained by mutator assists, and
 	// disposed on certain GC state transitions.
+	//
 	gcw gcWork
 
 	// wbBuf is this P's GC write barrier buffer.

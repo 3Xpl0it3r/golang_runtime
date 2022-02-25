@@ -18,20 +18,22 @@ func GOMAXPROCS(n int) int {
 	if GOARCH == "wasm" && n > 1 {
 		n = 1 // WebAssembly has no threads yet, so only one CPU is possible.
 	}
-
+	// 加锁
 	lock(&sched.lock)
 	ret := int(gomaxprocs)
 	unlock(&sched.lock)
 	if n <= 0 || n == ret {
 		return ret
 	}
-
+	// STW
 	stopTheWorld("GOMAXPROCS")
 
 	// newprocs will be processed by startTheWorld
+	// 更改 处理器的数量
 	newprocs = int32(n)
 
-	startTheWorld()
+	startTheWorld()	//  重新开始startTheWorld()
+	// startTheWorldWithSema最终会在这个函数里面调用procresize这个函数
 	return ret
 }
 

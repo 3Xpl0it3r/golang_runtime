@@ -122,6 +122,7 @@ func sigNoteSleep(*note) {
 }
 
 // BSD interface for threading.
+// 获取CPU的个数和页面大小
 func osinit() {
 	// pthread_create delayed until end of goenvs so that we
 	// can look at the environment first.
@@ -185,6 +186,7 @@ func newosproc(mp *m) {
 	// Initialize an attribute object.
 	var attr pthreadattr
 	var err int32
+	// c初始化线程
 	err = pthread_attr_init(&attr)
 	if err != 0 {
 		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
@@ -193,6 +195,7 @@ func newosproc(mp *m) {
 
 	// Find out OS stack size for our own stack guard.
 	var stacksize uintptr
+	// 获取栈大小
 	if pthread_attr_getstacksize(&attr, &stacksize) != 0 {
 		write(2, unsafe.Pointer(&failthreadcreate[0]), int32(len(failthreadcreate)))
 		exit(1)
@@ -210,6 +213,7 @@ func newosproc(mp *m) {
 	// setup and then calls mstart.
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
+	// 创建一个线程, 并且在新线程里面执行mastart
 	err = pthread_create(&attr, funcPC(mstart_stub), unsafe.Pointer(mp))
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 	if err != 0 {
@@ -282,7 +286,7 @@ func libpreinit() {
 // Called to initialize a new m (including the bootstrap m).
 // Called on the parent thread (main thread in case of bootstrap), can allocate memory.
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024) // OS X wants >= 8K
+	mp.gsignal = malg(32 * 1024) // OS X wants >= 8K //
 	mp.gsignal.m = mp
 }
 

@@ -36,32 +36,42 @@ func init() {
 }
 
 // Garbage collector work pool abstraction.
-//
+// 它实现了一个生产者和消费者模型，用来指向灰色的对象。
+// 一个灰色对象是一个被标记的，放在work队列里面的。
+// 一个黑色的对象也是被标记的，但是它不在工作队列里面
 // This implements a producer/consumer model for pointers to grey
 // objects. A grey object is one that is marked and on a work
 // queue. A black object is marked and not on a work queue.
 //
+// 写屏障，root discovery， stack scan ，和其他object 对象的扫描都会生产指向灰色对象的指针。
+// scanning 消费指向灰色对象的指针，然后把他们标记为黑色，并且扫描这些灰色指针也可能会产生新的灰色指针
 // Write barriers, root discovery, stack scanning, and object scanning
 // produce pointers to grey objects. Scanning consumes pointers to
 // grey objects, thus blackening them, and then scans them,
 // potentially producing new pointers to grey objects.
 
+// 一个gcWork 为gc 提供了一个生产/消费的work 的接口
 // A gcWork provides the interface to produce and consume work for the
 // garbage collector.
 //
+// gcWork 在栈上使用如下
 // A gcWork can be used on the stack as follows:
 //
 //     (preemption must be disabled)
 //     gcw := &getg().m.p.ptr().gcw
 //     .. call gcw.put() to produce and gcw.tryGet() to consume ..
 //
+// 非常重要的一点就是任何在标记阶段使用gcWork 必须要防止garbage collector 转换到mark termination 状态，因为gcWork 也许会是有gc work buffer。
 // It's important that any use of gcWork during the mark phase prevent
 // the garbage collector from transitioning to mark termination since
 // gcWork may locally hold GC work buffers. This can be done by
 // disabling preemption (systemstack or acquirem).
+// gcWork 是垃圾收集器中工作池的抽象，它实现了一个生产者和消费者的模型
 type gcWork struct {
+	// wbuf1 和 wbuf2 是主/备缓存
 	// wbuf1 and wbuf2 are the primary and secondary work buffers.
 	//
+	// 两个
 	// This can be thought of as a stack of both work buffers'
 	// pointers concatenated. When we pop the last pointer, we
 	// shift the stack up by one work buffer by bringing in a new
@@ -78,6 +88,8 @@ type gcWork struct {
 	// next.
 	//
 	// Invariant: Both wbuf1 and wbuf2 are nil or neither are.
+	// 当我们向该结构体里面增加对象的时候，它会优先操作主缓冲区，一旦主缓冲区存储空间不足，或者没有对象了，会触发备用缓存起的切换
+	// 当两个缓存区都不足或者都为空的时候，会从全局缓冲区中插入或者获取对象，可以从put方法里面查看细节
 	wbuf1, wbuf2 *workbuf
 
 	// Bytes marked (blackened) on this gcWork. This is aggregated
@@ -348,6 +360,7 @@ func (w *gcWork) dispose() {
 	}
 }
 
+// balance 移动一部分缓存在gcWork里面的work移动到全局队列里面，这个用来保证不同处理器之间的平衡
 // balance moves some work that's cached in this gcWork back on the
 // global queue.
 //go:nowritebarrierrec

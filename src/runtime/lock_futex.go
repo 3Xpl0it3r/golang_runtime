@@ -136,11 +136,15 @@ func notewakeup(n *note) {
 	futexwakeup(key32(&n.key), 1)
 }
 
+//  这个是和平台相关的
 func notesleep(n *note) {
+	// 获取当前的goroutine
 	gp := getg()
+	// 如果当前正在运行的goroutine是g0则抛出异常
 	if gp != gp.m.g0 {
 		throw("notesleep not on g0")
 	}
+	// 初始化sleep的时间间隔为-1， -1意味着它将永远的sleep
 	ns := int64(-1)
 	if *cgo_yield != nil {
 		// Sleep for an arbitrary-but-moderate interval to poll libc interceptors.
@@ -148,6 +152,7 @@ func notesleep(n *note) {
 	}
 	for atomic.Load(key32(&n.key)) == 0 {
 		gp.m.blocked = true
+		// 调用futexsleep 睡眠1ms或者永远的sleep， futex这个是一个syscall
 		futexsleep(key32(&n.key), 0, ns)
 		if *cgo_yield != nil {
 			asmcgocall(*cgo_yield, nil)

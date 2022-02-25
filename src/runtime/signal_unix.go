@@ -348,6 +348,7 @@ const preemptMSupported = pushCallSupported
 // marked for preemption and the goroutine is at an asynchronous
 // safe-point, it will preempt the goroutine. It always atomically
 // increments mp.preemptGen after handling a preemption request.
+// preemptM发送一个抢占请求给m,如果正在运行的G和P被标记为可以被抢占，并且他们也处于一个异步的安全点，那么它就会抢占这个goroutine.
 func preemptM(mp *m) {
 	if !pushCallSupported {
 		// This architecture doesn't support ctxt.pushCall

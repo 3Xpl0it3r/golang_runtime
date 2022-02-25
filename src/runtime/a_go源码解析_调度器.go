@@ -6,7 +6,59 @@ import (
 	"time"
 )
 
+func 垃圾回收(){
+	// 触发gc的三个方式
+	// sysmon和forcegchelper() 强制触发， 每隔一段时间检查test()来验证是否满足触发
+	forcegchelper()
+	// GC()手动强制触发
+	GC()
+	// 分配内存的时候触发
+	mallocgc()
+
+
+	// 开始执行垃圾收集
+	gcStart()
+	schedule()
+	notesleep()
+	// 辅助标记
+	// 为了保证用户内存分配的速度不会超过后台标记的速度，运行时还引入了辅助标记技术，它原则:分配了多少内存就需要完成多少标记任务
+	// 每个goroutine 都会有一个gcAssistBytes字段，这个字段存了goroutine辅助标记的对象字节数。
+	// 在并发标记阶段，当goroutine调用malloc分配新对象的时候，该函数会检查申请内存的goroutine是否入不敷出
+	// 申请内存的时候调用runtime.gcAssistAlloc 负责借债
+	// 扫描内存时调用 runtime.gcFlushBgCredit 负责还债
+	mallocgc()
+	gcFlushBgCredit()
+}
+
+func 系统监控(){
+	// go语言启动的时候，runtime 会在第一个goroutine 里面调用runtime.main 启动主程序
+	// 这个我们可以在汇编文件asm_<arch>.s 里面看到 	MOVQ	$runtime·mainPC(SB), AX		// entry   //  这个地方其实调用了runtime.main
+	// 这个是第一个函数
+	main()
+	{
+		// main里面 会通过newm 创建一个存储待执行函数和处理器的新的结构体runtime.m ， 将一些信息填充到m上
+		systemstack(func() {
+			newm(sysmon, nil, -1) // 参数p为nil ，因为系统监控就一个单独的goroutine, 不需要处理器， newm 最终它会调用newm1()函数
+		})
+		{
+			// newm1其实是通过d调用newosproc  来创建一个物理线程
+			newosproc() // z这个函数调用线程库，创建一个物理线程来执行m里面函数,在新线程里面调用mstart  函数 mstart 可以参考mstart函数注解
+			// 最终会在新的线程里面执行存储在runtime.m 的runtime.sysmon函数
+		}
+	}
+
+	// sysmon函数
+	sysmon()
+	{
+		// 检查死锁
+		checkdead()			//  具体查看注释
+		// 进入死循环， 这个时候就真正的开始运行计时器了
+	}
+}
+
 func go源码阅读_调度器(){
+
+
 	checkTimers()
 	libpreinit()
 
@@ -20,6 +72,7 @@ func go源码阅读_调度器(){
 	// processsize 创建/初始化合适的数量的处理器，非空p(p队列里面存在非空的g), 尝试获取一个空闲的m 将m和p进行绑定起来
 
 	newproc() 			// d当检测到有go关键字的时候，编译器会将go语句转换成newproc函数调用， 这个时候会获取/创建一个goroutine 结构体，并且初始化，设置堆栈信息，设置一些调度信息，然后将goroutine 放到队列里面，等待调度
+	GOMAXPROCS()		// 也可以通过这个函数动态的调整处理器的数量
 
 
 	/*
@@ -101,6 +154,7 @@ func 源码阅读_调度器_调度时间点_主动挂起(){
 	goready(nil, timerDeleted)
 	// 这个函数最终会在系统栈上执行ready()函数
 	ready()
+
 }
 
 
@@ -166,8 +220,10 @@ func 源码阅读_调度器_调度时间点_系统调用(){
 func 源码阅读_调度器_调度时间点_协作式调度(){
 	// 在系统调用里面触发调度，里面已经包含了协作式的调度
 	// 协作式的调度会主动让出处理器，允许其他goroutine运行。该函数无法挂起goroutine, 调度器可能会将当前goroutine调度到其他的节点
+	// 主动用户让权
 	Gosched()
 	{
+		checkTimeouts()
 		mcall(gosched_m)
 		{
 			goschedImpl()
@@ -176,4 +232,17 @@ func 源码阅读_调度器_调度时间点_协作式调度(){
 			}
 		}
 	}
+
+}
+
+
+func 同步协作式调度_主动调度弃权(){
+	// 这是一种通过主动标记抢占方式来实现的， 当发生栈分段时间，通过检查自身的抢占标记，来决定是不是要继续执行
+
+}
+
+
+func 异步抢占调度(){
+	// 监控抢占
+	// 被动gc抢占
 }
